@@ -9,13 +9,13 @@ let aiClient: GoogleGenAI | null = null;
 const getAiClient = () => {
   if (aiClient) return aiClient;
 
-  // Parcel automatically replaces process.env.API_KEY with the value from the .env file at build time.
-  // We do not need to import 'process' explicitly.
+  // Vite automatically replaces process.env.API_KEY with the value from GEMINI_API_KEY in the .env file at build time.
+  // The mapping is defined in vite.config.ts
   const apiKey = process.env.API_KEY;
-  
+
   // Return null if key is missing or is the placeholder
   if (!apiKey || apiKey.includes('Cole_Sua_API_Key')) {
-    console.warn("API_KEY not found in .env file or is still the placeholder.");
+    console.warn("GEMINI_API_KEY not configured in .env file or is still the placeholder.");
     return null;
   }
 
@@ -32,7 +32,7 @@ export const getBotResponse = async (
     const ai = getAiClient();
     
     if (!ai) {
-      return "Error: SYSTEM ERROR. API_KEY not configured in .env file.\n\nIMPORTANT: If you just added the .env file, you must STOP the server (Ctrl+C) and run 'npm start' again for the changes to take effect.";
+      return "Error: SYSTEM ERROR. GEMINI_API_KEY not configured in .env file.\n\nSTEPS TO FIX:\n1. Open the .env file in the project root\n2. Replace 'Cole_Sua_API_Key_Aqui' with your actual Gemini API key\n3. Get your API key from: https://aistudio.google.com/app/apikey\n4. STOP the server (Ctrl+C) and run 'npm run dev' again";
     }
 
     let chat = activeChats[userUin];
