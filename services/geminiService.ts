@@ -1,12 +1,26 @@
 import { GoogleGenAI, Chat, GenerateContentResponse } from "@google/genai";
 import { Message } from "../types";
-
-// In a real production app, this key would be proxied through a backend.
-// As per instructions, we use process.env.API_KEY directly.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+import process from 'process';
 
 // We keep a simple in-memory store of chats for the bot sessions
 const activeChats: Record<string, Chat> = {};
+
+let aiClient: GoogleGenAI | null = null;
+
+const getAiClient = () => {
+  if (aiClient) return aiClient;
+
+  const apiKey = process.env.API_KEY;
+  
+  // Return null if key is missing or is the placeholder
+  if (!apiKey || apiKey.includes('Cole_Sua_API_Key')) {
+    console.warn("API_KEY not found in .env file");
+    return null;
+  }
+
+  aiClient = new GoogleGenAI({ apiKey });
+  return aiClient;
+};
 
 export const getBotResponse = async (
   userMessage: string, 
@@ -14,6 +28,12 @@ export const getBotResponse = async (
   history: Message[]
 ): Promise<string> => {
   try {
+    const ai = getAiClient();
+    
+    if (!ai) {
+      return "Error: SYSTEM ERROR. API_KEY not configured in .env file. Please check console.";
+    }
+
     let chat = activeChats[userUin];
 
     if (!chat) {
@@ -41,6 +61,6 @@ export const getBotResponse = async (
 
   } catch (error) {
     console.error("Gemini API Error:", error);
-    return "Error: Could not connect to the mainframe. Please check your API Key.";
+    return "Error: Could not connect to the mainframe. Please check your API Key configuration.";
   }
 };
