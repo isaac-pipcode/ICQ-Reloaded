@@ -1,4 +1,4 @@
-import { GoogleGenAI, Chat, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Chat, GenerateContentResponse, HarmBlockThreshold, HarmCategory } from "@google/genai";
 import { Message } from "../types";
 
 // We keep a simple in-memory store of chats for the bot sessions
@@ -9,13 +9,19 @@ let aiClient: GoogleGenAI | null = null;
 const getAiClient = () => {
   if (aiClient) return aiClient;
 
-  // Parcel automatically replaces process.env.API_KEY with the value from the .env file at build time.
-  // We do not need to import 'process' explicitly.
+  // In production (Vercel), process.env.API_KEY is injected during build.
+  // In local (Parcel), it is injected from .env
   const apiKey = process.env.API_KEY;
   
   // Return null if key is missing or is the placeholder
   if (!apiKey || apiKey.includes('Cole_Sua_API_Key')) {
-    console.warn("API_KEY not found in .env file or is still the placeholder.");
+    // Check if we are in production to show a specific message
+    const isProd = process.env.NODE_ENV === 'production';
+    if (!isProd) {
+        console.warn("API_KEY not found in .env file.");
+    } else {
+        console.warn("API_KEY not found in Vercel Environment Variables.");
+    }
     return null;
   }
 
@@ -32,7 +38,10 @@ export const getBotResponse = async (
     const ai = getAiClient();
     
     if (!ai) {
-      return "Error: SYSTEM ERROR. API_KEY not configured in .env file.\n\nIMPORTANT: If you just added the .env file, you must STOP the server (Ctrl+C) and run 'npm start' again for the changes to take effect.";
+      if (process.env.NODE_ENV === 'production') {
+         return "Error: SYSTEM ERROR. API_KEY missing in Vercel Settings. Please add it in Settings > Environment Variables.";
+      }
+      return "Error: SYSTEM ERROR. API_KEY not configured. \n\nIMPORTANT: If you just added the .env file locally, STOP the server (Ctrl+C) and run 'npm start' again.";
     }
 
     let chat = activeChats[userUin];
@@ -48,7 +57,14 @@ export const getBotResponse = async (
           Use some internet slang from the 90s/2000s occasionally (like "cool", "webmaster", "netizen", "lol").
           Keep responses relatively short, suitable for a chat window.
           If asked about your status, say you are surfing the information superhighway.`,
-          temperature: 0.8, // Creative enough for a persona
+          temperature: 0.8,
+          // Low safety settings to prevent "empty response" on casual chat
+          safetySettings: [
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          ]
         },
       });
       activeChats[userUin] = chat;
