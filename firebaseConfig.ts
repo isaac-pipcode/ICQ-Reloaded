@@ -1,24 +1,23 @@
-
+// Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-// ------------------------------------------------------------------
-// IMPORTANTE: SUBSTITUA OS VALORES ABAIXO PELOS DO SEU PROJETO FIREBASE
-// Você encontra isso no Console do Firebase -> Configurações do Projeto
-// ------------------------------------------------------------------
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "AIzaSyD-EXEMPLO-DA-SUA-CHAVE-AQUI",
-  authDomain: "seu-projeto.firebaseapp.com",
-  projectId: "seu-projeto",
-  storageBucket: "seu-projeto.firebasestorage.app",
-  messagingSenderId: "123456789",
-  appId: "1:123456:web:abcdef"
+  apiKey: "AIzaSyD4_gBwJHYvVjqgr_ATOV80IG1nHhbki1Y",
+  authDomain: "isac-cbd0a.firebaseapp.com",
+  projectId: "isac-cbd0a",
+  storageBucket: "isac-cbd0a.firebasestorage.app",
+  messagingSenderId: "676965754838",
+  appId: "1:676965754838:web:529983897adcb36138a677",
+  measurementId: "G-4Z2RBSY1VD"
 };
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
 
-// Export services so we can use them in App.tsx
-export const db = getFirestore(app);
-export const auth = getAuth(app);
+export { db, auth };

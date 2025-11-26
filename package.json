@@ -1,23 +1,24 @@
 {
-  "name": "icq-reloaded",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "name": "icq-retro-chat",
+  "version": "1.0.0",
+  "description": "ICQ Clone with React and Firebase",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "start": "parcel index.html --open",
+    "build": "parcel build index.html"
   },
   "dependencies": {
-    "react-dom": "^19.2.0",
-    "react": "^19.2.0",
-    "@google/genai": "^1.30.0",
-    "firebase": "^12.6.0"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "firebase": "^10.8.0",
+    "@google/genai": "^0.2.0"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "parcel": "^2.11.0",
+    "process": "^0.11.10",
+    "buffer": "^6.0.3",
+    "events": "^3.3.0",
+    "tailwindcss": "^3.4.1",
+    "postcss": "^8.4.35",
+    "autoprefixer": "^10.4.17"
   }
 }
