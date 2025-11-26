@@ -12,7 +12,6 @@ import {
   addDoc, 
   onSnapshot, 
   query, 
-  orderBy, 
   limit, 
   setDoc, 
   doc, 
@@ -84,8 +83,15 @@ export default function App() {
 
   // 1. Auth & Presence Listener
   useEffect(() => {
-    // Listen for other users online in Firebase
-    const q = query(collection(db, "users"), orderBy("lastSeen", "desc"), limit(50));
+    // CRITICAL FIX: Do not attempt to listen to users if not logged in locally OR if Firebase Auth isn't ready.
+    if (!currentUser) return;
+    if (!auth.currentUser) {
+        console.warn("Waiting for Firebase Auth to initialize...");
+        return;
+    }
+
+    // Simplified query to avoid index errors
+    const q = query(collection(db, "users"), limit(50));
     
     const unsubscribeUsers = onSnapshot(q, 
       (snapshot) => {
@@ -109,18 +115,22 @@ export default function App() {
       },
       (error) => {
         console.error("Firebase Users Listener Error:", error);
-        // Do not block UI, just log
+        if (error.code === 'permission-denied') {
+            alert("ACCESS DENIED: Please check your Firebase Console Rules. They must be 'allow read, write: if true;' for this demo.");
+        }
       }
     );
 
     return () => unsubscribeUsers();
-  }, [currentUser]);
+  }, [currentUser]); // Trigger when local user state changes
 
-  // 2. Message Listener (The "Socket" replacement)
+  // 2. Message Listener
   useEffect(() => {
     if (!currentUser) return;
+    if (!auth.currentUser) return;
 
-    const q = query(collection(db, "messages"), orderBy("timestamp", "asc"), limit(100));
+    // Simplified query
+    const q = query(collection(db, "messages"), limit(100));
 
     const unsubscribeMessages = onSnapshot(q, 
       (snapshot) => {
@@ -157,6 +167,7 @@ export default function App() {
       },
       (error) => {
         console.error("Firebase Messages Listener Error:", error);
+        // Do not alert here to avoid double alerts, just log.
       }
     );
 
@@ -166,7 +177,7 @@ export default function App() {
   // Update my status on window close/refresh
   useEffect(() => {
     const handleBeforeUnload = () => {
-        if (currentUser) {
+        if (currentUser && auth.currentUser) {
             const userRef = doc(db, "users", currentUser.uin);
             // Fire and forget
             updateDoc(userRef, { status: UserStatus.OFFLINE }).catch(() => {});
@@ -189,9 +200,13 @@ export default function App() {
          // Avoid duplicates
          if (existing && existing.messages.some(m => m.id === msg.id)) return prev;
 
+         // Sort messages by timestamp since we removed orderBy in query
+         const newMessages = existing ? [...existing.messages, msg] : [msg];
+         newMessages.sort((a, b) => a.timestamp - b.timestamp);
+
          const updatedSession = existing 
-            ? { ...existing, messages: [...existing.messages, msg], isOpen: true }
-            : { contactUin: partnerUin, messages: [msg], draft: '', isOpen: true, minimized: false };
+            ? { ...existing, messages: newMessages, isOpen: true }
+            : { contactUin: partnerUin, messages: newMessages, draft: '', isOpen: true, minimized: false };
          
          return { ...prev, [partnerUin]: updatedSession };
      });
@@ -219,6 +234,8 @@ export default function App() {
             status: UserStatus.ONLINE
         };
 
+        // Update or Set user data
+        // If this fails, it throws, so we catch it below
         await setDoc(doc(db, "users", loginUin), {
             ...newUser,
             lastSeen: serverTimestamp()
@@ -231,9 +248,9 @@ export default function App() {
         console.error("Login failed:", err);
         let msg = "Could not connect to ICQ Network.";
         if (err.code === 'auth/operation-not-allowed') {
-            msg += " Please enable Anonymous Auth in Firebase Console.";
+            msg += "\n\nSOLUTION: Go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
         } else if (err.code === 'permission-denied') {
-            msg += " Check Firestore Rules.";
+            msg += "\n\nSOLUTION: Go to Firebase Console -> Firestore Database -> Rules -> Change to 'allow read, write: if true;'";
         }
         alert(msg);
     }
