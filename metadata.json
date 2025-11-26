@@ -1,0 +1,5 @@
+{
+  "name": "ICQ Reloaded",
+  "description": "A fully functional, retro-styled chat application inspired by the classic ICQ of the 90s. Features real-time AI chat powered by Google Gemini, authentic sound effects, and a nostalgic Windows 95/98 interface.",
+  "requestFramePermissions": []
+}

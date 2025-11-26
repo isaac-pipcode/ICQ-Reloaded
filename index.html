@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ICQ React</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=VT323&family=Tahoma:wght@400;700&display=swap');
+      
+      body {
+        background-color: #3b6ea5;
+        font-family: 'Tahoma', sans-serif;
+        overflow: hidden; /* Prevent scrolling on the body, handle in windows */
+        background-image: url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 20.5V18H0v-2h20v-2H0v-2h20v-2H0V8h20V6H0V4h20V2H0V0h22v20h2V0h2v20h2V0h2v20h2V0h2v20h2v2H22v20h-2v-20h-2v20h-2v-20h-2v20h-2v-20h-2v20H8v-20H6v20H4v-20H2v20H0v-2.5l20 .5z' fill='%234279b0' fill-opacity='0.4' fill-rule='evenodd'/%3E%3C/svg%3E");
+      }
+
+      /* Custom Scrollbar for that Retro Feel */
+      ::-webkit-scrollbar {
+        width: 16px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #dfdfdf;
+        border-left: 1px solid white;
+      }
+      ::-webkit-scrollbar-thumb {
+        background-color: #c0c0c0;
+        border: 2px solid;
+        border-color: #fff #404040 #404040 #fff;
+      }
+      ::-webkit-scrollbar-button {
+        background-color: #c0c0c0;
+        border: 2px solid;
+        border-color: #fff #404040 #404040 #fff;
+        height: 16px;
+      }
+      
+      .retro-shadow {
+        box-shadow: 1px 1px 0px 1px rgba(0,0,0,0.5);
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
