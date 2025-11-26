@@ -19,7 +19,7 @@ import {
   serverTimestamp,
   updateDoc
 } from 'firebase/firestore';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { signInAnonymously } from 'firebase/auth';
 
 // --- Sound Utility ---
 const playUhOh = () => {
@@ -87,72 +87,78 @@ export default function App() {
     // Listen for other users online in Firebase
     const q = query(collection(db, "users"), orderBy("lastSeen", "desc"), limit(50));
     
-    const unsubscribeUsers = onSnapshot(q, (snapshot) => {
-      const onlineUsers: User[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        // Don't show myself in the list
-        if (currentUser && data.uin === currentUser.uin) return;
-        
-        // Basic check to see if user was active recently (simulated logic)
-        // In a real app, you'd filter by timestamp
-        onlineUsers.push({
-          uin: data.uin,
-          nickname: data.nickname,
-          email: data.email,
-          status: data.status as UserStatus,
-          isBot: false
+    const unsubscribeUsers = onSnapshot(q, 
+      (snapshot) => {
+        const onlineUsers: User[] = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          // Don't show myself in the list
+          if (currentUser && data.uin === currentUser.uin) return;
+          
+          onlineUsers.push({
+            uin: data.uin,
+            nickname: data.nickname,
+            email: data.email,
+            status: data.status as UserStatus,
+            isBot: false
+          });
         });
-      });
-      
-      // Merge Firebase users with Bot users
-      setContacts([...defaultContacts, ...onlineUsers]);
-    });
+        
+        // Merge Firebase users with Bot users
+        setContacts([...defaultContacts, ...onlineUsers]);
+      },
+      (error) => {
+        console.error("Firebase Users Listener Error:", error);
+        // Do not block UI, just log
+      }
+    );
 
     return () => unsubscribeUsers();
-  }, [currentUser]); // Re-run when currentUser changes so we filter self out correctly
+  }, [currentUser]);
 
   // 2. Message Listener (The "Socket" replacement)
   useEffect(() => {
     if (!currentUser) return;
 
-    // Listen to the last 100 messages globally (simplification for demo)
-    // In production, you would query where(receiver == me) OR where(sender == me)
     const q = query(collection(db, "messages"), orderBy("timestamp", "asc"), limit(100));
 
-    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const msgData = change.doc.data();
-          
-          // Only process if it involves me
-          if (msgData.receiverUin === currentUser.uin || msgData.senderUin === currentUser.uin) {
+    const unsubscribeMessages = onSnapshot(q, 
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            const msgData = change.doc.data();
             
-            const msg: Message = {
-                id: change.doc.id,
-                senderUin: msgData.senderUin,
-                receiverUin: msgData.receiverUin,
-                text: msgData.text,
-                timestamp: msgData.timestamp ? msgData.timestamp.toMillis() : Date.now(),
-                read: true
-            };
+            // Only process if it involves me
+            if (msgData.receiverUin === currentUser.uin || msgData.senderUin === currentUser.uin) {
+              
+              const msg: Message = {
+                  id: change.doc.id,
+                  senderUin: msgData.senderUin,
+                  receiverUin: msgData.receiverUin,
+                  text: msgData.text,
+                  timestamp: msgData.timestamp ? msgData.timestamp.toMillis() : Date.now(),
+                  read: true
+              };
 
-            // If I received it, play sound
-            if (msg.receiverUin === currentUser.uin) {
-                // Determine if it's "new" (to avoid sound on initial load of history)
-                // Simple heuristic: if timestamp is very recent
-                if (Date.now() - msg.timestamp < 2000) {
-                    playUhOh();
-                }
-                handleIncomingMessage(msg);
-            } else {
-                // It's a message I sent (from another tab/device maybe), just sync UI
-                handleIncomingMessage(msg);
+              // If I received it, play sound
+              if (msg.receiverUin === currentUser.uin) {
+                  // Determine if it's "new" (to avoid sound on initial load of history)
+                  if (Date.now() - msg.timestamp < 2000) {
+                      playUhOh();
+                  }
+                  handleIncomingMessage(msg);
+              } else {
+                  // It's a message I sent, just sync UI
+                  handleIncomingMessage(msg);
+              }
             }
           }
-        }
-      });
-    });
+        });
+      },
+      (error) => {
+        console.error("Firebase Messages Listener Error:", error);
+      }
+    );
 
     return () => unsubscribeMessages();
   }, [currentUser]);
@@ -161,10 +167,9 @@ export default function App() {
   useEffect(() => {
     const handleBeforeUnload = () => {
         if (currentUser) {
-            // Attempt to set offline status (best effort)
-            // Note: sendBeacon is better for this but keep it simple for now
             const userRef = doc(db, "users", currentUser.uin);
-            updateDoc(userRef, { status: UserStatus.OFFLINE });
+            // Fire and forget
+            updateDoc(userRef, { status: UserStatus.OFFLINE }).catch(() => {});
         }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -181,7 +186,7 @@ export default function App() {
      setChatSessions(prev => {
          const existing = prev[partnerUin];
          
-         // Avoid duplicates if React StrictMode runs twice or network lag
+         // Avoid duplicates
          if (existing && existing.messages.some(m => m.id === msg.id)) return prev;
 
          const updatedSession = existing 
@@ -191,7 +196,7 @@ export default function App() {
          return { ...prev, [partnerUin]: updatedSession };
      });
      
-     // Only force focus window if I received it, not if I sent it
+     // Only force focus window if I received it
      if (!activeWindow && msg.receiverUin === currentUser?.uin) {
          setActiveWindow(partnerUin);
      }
@@ -205,7 +210,6 @@ export default function App() {
     }
 
     try {
-        // 1. Authenticate anonymously to get DB access
         await signInAnonymously(auth);
 
         const newUser: User = {
@@ -215,8 +219,6 @@ export default function App() {
             status: UserStatus.ONLINE
         };
 
-        // 2. Write my presence to Firebase 'users' collection
-        // using setDoc with merge:true to update existing or create new
         await setDoc(doc(db, "users", loginUin), {
             ...newUser,
             lastSeen: serverTimestamp()
@@ -225,9 +227,15 @@ export default function App() {
         playUhOh();
         setCurrentUser(newUser);
 
-    } catch (err) {
+    } catch (err: any) {
         console.error("Login failed:", err);
-        alert("Could not connect to ICQ Network (Firebase). Check console.");
+        let msg = "Could not connect to ICQ Network.";
+        if (err.code === 'auth/operation-not-allowed') {
+            msg += " Please enable Anonymous Auth in Firebase Console.";
+        } else if (err.code === 'permission-denied') {
+            msg += " Check Firestore Rules.";
+        }
+        alert(msg);
     }
   };
 
@@ -267,7 +275,7 @@ export default function App() {
 
     const text = session.draft;
     
-    // Clear draft immediately for UI responsiveness
+    // Clear draft immediately
     setChatSessions(prev => ({
         ...prev,
         [targetUin]: { ...prev[targetUin], draft: '' }
@@ -278,7 +286,6 @@ export default function App() {
 
     if (contact?.isBot) {
         // --- BOT PATH (Local AI) ---
-        // Add my message locally immediately
         const myMsg: Message = {
             id: Date.now().toString(),
             senderUin: currentUser.uin,
@@ -306,8 +313,6 @@ export default function App() {
         }
     } else {
         // --- HUMAN PATH (Firebase) ---
-        // We do NOT add the message to local state manually. 
-        // We wait for the onSnapshot listener to confirm it was added to DB.
         try {
             await addDoc(collection(db, "messages"), {
                 senderUin: currentUser.uin,
@@ -319,7 +324,7 @@ export default function App() {
             playMsgSound();
         } catch (e) {
             console.error("Error sending message", e);
-            alert("Network error: Message not sent.");
+            alert("Network error: Message not sent. Check Firebase permissions.");
         }
     }
   };

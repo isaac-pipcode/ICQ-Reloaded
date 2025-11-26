@@ -1,6 +1,5 @@
 import { GoogleGenAI, Chat, GenerateContentResponse } from "@google/genai";
 import { Message } from "../types";
-import process from 'process';
 
 // We keep a simple in-memory store of chats for the bot sessions
 const activeChats: Record<string, Chat> = {};
@@ -10,11 +9,13 @@ let aiClient: GoogleGenAI | null = null;
 const getAiClient = () => {
   if (aiClient) return aiClient;
 
+  // Parcel automatically replaces process.env.API_KEY with the value from the .env file at build time.
+  // We do not need to import 'process' explicitly.
   const apiKey = process.env.API_KEY;
   
   // Return null if key is missing or is the placeholder
   if (!apiKey || apiKey.includes('Cole_Sua_API_Key')) {
-    console.warn("API_KEY not found in .env file");
+    console.warn("API_KEY not found in .env file or is still the placeholder.");
     return null;
   }
 
@@ -31,7 +32,7 @@ export const getBotResponse = async (
     const ai = getAiClient();
     
     if (!ai) {
-      return "Error: SYSTEM ERROR. API_KEY not configured in .env file. Please check console.";
+      return "Error: SYSTEM ERROR. API_KEY not configured in .env file. Please create a .env file in the project root with API_KEY=your_key.";
     }
 
     let chat = activeChats[userUin];
