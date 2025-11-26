@@ -32,7 +32,7 @@ export const getBotResponse = async (
     const ai = getAiClient();
     
     if (!ai) {
-      return "Error: SYSTEM ERROR. API_KEY not configured in .env file. Please create a .env file in the project root with API_KEY=your_key.";
+      return "Error: SYSTEM ERROR. API_KEY not configured in .env file.\n\nIMPORTANT: If you just added the .env file, you must STOP the server (Ctrl+C) and run 'npm start' again for the changes to take effect.";
     }
 
     let chat = activeChats[userUin];
