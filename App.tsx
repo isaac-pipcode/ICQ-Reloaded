@@ -7,16 +7,17 @@ import { getBotResponse } from './services/geminiService';
 
 // --- Firebase Imports ---
 import { db, auth } from './firebaseConfig';
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  limit, 
-  setDoc, 
-  doc, 
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  limit,
+  setDoc,
+  doc,
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
 
@@ -67,41 +68,41 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginUin, setLoginUin] = useState('');
   const [loginPass, setLoginPass] = useState('');
-  
+
   // Default contacts (Bots/System)
   const defaultContacts = [
     { uin: '987654', nickname: 'GeminiBot', email: 'ai@google.com', status: UserStatus.ONLINE, isBot: true },
-    { uin: '100000', nickname: 'System', email: 'admin@icq.com', status: UserStatus.AWAY, isBot: true },
   ];
 
   const [contacts, setContacts] = useState<User[]>(defaultContacts);
+  const [allUsers, setAllUsers] = useState<User[]>([]); // Lista de todos os usuários disponíveis
   const [chatSessions, setChatSessions] = useState<Record<string, ChatSession>>({});
   const [activeWindow, setActiveWindow] = useState<string | null>(null);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // --- Firebase Logic ---
 
-  // 1. Auth & Presence Listener
+  // 1. Listener para todos os usuários disponíveis (para adicionar contatos)
   useEffect(() => {
-    // CRITICAL FIX: Do not attempt to listen to users if not logged in locally OR if Firebase Auth isn't ready.
     if (!currentUser) return;
     if (!auth.currentUser) {
-        console.warn("Waiting for Firebase Auth to initialize...");
+        console.warn("Aguardando autenticação Firebase...");
         return;
     }
 
-    // Simplified query to avoid index errors
     const q = query(collection(db, "users"), limit(50));
-    
-    const unsubscribeUsers = onSnapshot(q, 
+
+    const unsubscribeAllUsers = onSnapshot(q,
       (snapshot) => {
-        const onlineUsers: User[] = [];
+        const users: User[] = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          // Don't show myself in the list
+          // Não mostrar eu mesmo na lista
           if (currentUser && data.uin === currentUser.uin) return;
-          
-          onlineUsers.push({
+
+          users.push({
             uin: data.uin,
             nickname: data.nickname,
             email: data.email,
@@ -109,22 +110,55 @@ export default function App() {
             isBot: false
           });
         });
-        
-        // Merge Firebase users with Bot users
-        setContacts([...defaultContacts, ...onlineUsers]);
+
+        setAllUsers(users);
       },
       (error) => {
-        console.error("Firebase Users Listener Error:", error);
+        console.error("Erro ao buscar usuários:", error);
         if (error.code === 'permission-denied') {
-            alert("ACCESS DENIED: Please check your Firebase Console Rules. They must be 'allow read, write: if true;' for this demo.");
+            alert("ACESSO NEGADO: Verifique as regras do Firebase. Elas devem ser 'allow read, write: if true;' para esta demo.");
         }
       }
     );
 
-    return () => unsubscribeUsers();
-  }, [currentUser]); // Trigger when local user state changes
+    return () => unsubscribeAllUsers();
+  }, [currentUser]);
 
-  // 2. Message Listener
+  // 2. Listener para os contatos do usuário atual
+  useEffect(() => {
+    if (!currentUser) return;
+    if (!auth.currentUser) return;
+
+    // Buscar contatos do usuário na subcoleção
+    const contactsRef = collection(db, "users", currentUser.uin, "contacts");
+    const q = query(contactsRef, limit(100));
+
+    const unsubscribeContacts = onSnapshot(q,
+      (snapshot) => {
+        const userContacts: User[] = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          userContacts.push({
+            uin: data.uin,
+            nickname: data.nickname,
+            email: data.email,
+            status: data.status as UserStatus,
+            isBot: false
+          });
+        });
+
+        // Mesclar bots com contatos do usuário
+        setContacts([...defaultContacts, ...userContacts]);
+      },
+      (error) => {
+        console.error("Erro ao buscar contatos:", error);
+      }
+    );
+
+    return () => unsubscribeContacts();
+  }, [currentUser]);
+
+  // 3. Message Listener
   useEffect(() => {
     if (!currentUser) return;
     if (!auth.currentUser) return;
@@ -190,6 +224,46 @@ export default function App() {
 
   // --- Logic Helpers ---
 
+  const addContact = async (user: User) => {
+    if (!currentUser) return;
+
+    try {
+      // Adicionar na subcoleção de contatos do usuário
+      await setDoc(doc(db, "users", currentUser.uin, "contacts", user.uin), {
+        uin: user.uin,
+        nickname: user.nickname,
+        email: user.email,
+        status: user.status
+      });
+      setShowAddContact(false);
+    } catch (error) {
+      console.error("Erro ao adicionar contato:", error);
+      alert("Erro ao adicionar contato. Verifique as permissões do Firebase.");
+    }
+  };
+
+  const removeContact = async (uin: string) => {
+    if (!currentUser) return;
+    if (contacts.find(c => c.uin === uin)?.isBot) {
+      alert("Não é possível remover contatos do sistema.");
+      return;
+    }
+
+    if (!confirm("Deseja realmente remover este contato?")) return;
+
+    try {
+      const contactRef = doc(db, "users", currentUser.uin, "contacts", uin);
+      await deleteDoc(contactRef);
+      // Fechar chat se estiver aberto
+      if (chatSessions[uin]?.isOpen) {
+        closeChat(uin);
+      }
+    } catch (error) {
+      console.error("Erro ao remover contato:", error);
+      alert("Erro ao remover contato.");
+    }
+  };
+
   const handleIncomingMessage = (msg: Message) => {
      // Identify the "Partner" in this conversation
      const partnerUin = msg.senderUin === currentUser?.uin ? msg.receiverUin : msg.senderUin;
@@ -220,7 +294,7 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loginUin.length < 3) {
-      alert("Please enter a valid UIN (min 3 chars)");
+      alert("Por favor, insira um UIN válido (mínimo 3 caracteres)");
       return;
     }
 
@@ -229,13 +303,12 @@ export default function App() {
 
         const newUser: User = {
             uin: loginUin,
-            nickname: loginUin === '111111' ? 'Admin' : `User_${loginUin}`,
-            email: 'user@web.net',
+            nickname: loginUin === '111111' ? 'Admin' : `Usuario_${loginUin}`,
+            email: 'usuario@web.net',
             status: UserStatus.ONLINE
         };
 
-        // Update or Set user data
-        // If this fails, it throws, so we catch it below
+        // Atualizar ou definir dados do usuário
         await setDoc(doc(db, "users", loginUin), {
             ...newUser,
             lastSeen: serverTimestamp()
@@ -245,12 +318,12 @@ export default function App() {
         setCurrentUser(newUser);
 
     } catch (err: any) {
-        console.error("Login failed:", err);
-        let msg = "Could not connect to ICQ Network.";
+        console.error("Falha no login:", err);
+        let msg = "Não foi possível conectar à Rede ICQ.";
         if (err.code === 'auth/operation-not-allowed') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
+            msg += "\n\nSOLUÇÃO: Vá ao Console do Firebase -> Authentication -> Métodos de login -> Habilitar Anônimo.";
         } else if (err.code === 'permission-denied') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Firestore Database -> Rules -> Change to 'allow read, write: if true;'";
+            msg += "\n\nSOLUÇÃO: Vá ao Console do Firebase -> Firestore Database -> Regras -> Altere para 'allow read, write: if true;'";
         }
         alert(msg);
     }
@@ -340,8 +413,8 @@ export default function App() {
             });
             playMsgSound();
         } catch (e) {
-            console.error("Error sending message", e);
-            alert("Network error: Message not sent. Check Firebase permissions.");
+            console.error("Erro ao enviar mensagem", e);
+            alert("Erro de rede: Mensagem não enviada. Verifique as permissões do Firebase.");
         }
     }
   };
@@ -364,7 +437,7 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="h-screen w-screen flex items-center justify-center relative">
-        <RetroWindow title="ICQ Login" width="w-80" icon={FLOWER_ICON}>
+        <RetroWindow title="Login ICQ" width="w-80" icon={FLOWER_ICON}>
           <form onSubmit={handleLogin} className="flex flex-col gap-4 py-4">
             <div className="flex items-center gap-4">
                <div className="w-16 h-16 bg-gray-300 border-2 border-gray-500 inset shadow-inner flex items-center justify-center">
@@ -375,28 +448,28 @@ export default function App() {
                <div className="flex flex-col gap-2 w-full">
                   <div className="flex flex-col">
                     <label className="text-xs mb-0.5">ICQ #:</label>
-                    <RetroInput 
-                        value={loginUin} 
-                        onChange={e => setLoginUin(e.target.value)} 
+                    <RetroInput
+                        value={loginUin}
+                        onChange={e => setLoginUin(e.target.value)}
                         placeholder="Ex: 123456"
                         autoFocus
                     />
                   </div>
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">Password:</label>
-                    <RetroInput 
+                    <label className="text-xs mb-0.5">Senha:</label>
+                    <RetroInput
                         type="password"
                         value={loginPass}
                         onChange={e => setLoginPass(e.target.value)}
-                        placeholder="(Any for Demo)"
+                        placeholder="(Qualquer para Demo)"
                     />
                   </div>
                </div>
             </div>
-            
+
             <div className="flex justify-between items-center mt-2">
-                <div className="text-xs underline text-blue-800 cursor-pointer">New User?</div>
-                <RetroButton type="submit" className="w-24">Connect</RetroButton>
+                <div className="text-xs underline text-blue-800 cursor-pointer">Novo Usuário?</div>
+                <RetroButton type="submit" className="w-24">Conectar</RetroButton>
             </div>
           </form>
         </RetroWindow>
@@ -407,11 +480,11 @@ export default function App() {
   return (
     <div className="h-screen w-screen p-4 flex gap-4 flex-wrap items-start justify-center md:justify-start">
       
-      {/* Contact List */}
-      <RetroWindow 
-        title={`${currentUser.uin} - ${currentUser.nickname}`} 
-        width="w-64" 
-        height="h-[80vh] min-h-[400px]" 
+      {/* Lista de Contatos */}
+      <RetroWindow
+        title={`${currentUser.uin} - ${currentUser.nickname}`}
+        width="w-64"
+        height="h-[80vh] min-h-[400px]"
         icon={FLOWER_ICON}
         onMinimize={() => {}}
         onClose={() => setCurrentUser(null)}
@@ -419,33 +492,40 @@ export default function App() {
       >
         <div className="mb-2 flex items-center justify-between border-b border-white pb-1">
              <div className="flex items-center gap-2 cursor-pointer bg-gray-200 px-1 border border-gray-400">
-                {STATUS_ICONS[currentUser.status]} 
+                {STATUS_ICONS[currentUser.status]}
                 <span className="text-sm font-bold">{currentUser.status}</span>
                 <span className="ml-1 text-[10px]">▼</span>
              </div>
-             <div className="text-xs italic text-gray-500">Net Detect: ON</div>
+             <div className="text-xs italic text-gray-500">Rede: ON</div>
         </div>
 
         <div className="mb-2">
             <SunkenContainer>
                 <div className="flex items-center bg-white px-1">
                     <span className="text-gray-400 mr-1">🔍</span>
-                    <input className="w-full text-sm outline-none" placeholder="Search contact..." />
+                    <input className="w-full text-sm outline-none" placeholder="Buscar contato..." />
                 </div>
             </SunkenContainer>
         </div>
 
         <div className="flex-1 overflow-y-auto bg-white border-2 border-t-black border-l-black border-b-white border-r-white">
             <div className="bg-[#c0c0c0] px-1 py-0.5 text-xs font-bold border-b border-gray-400 flex justify-between items-center">
-                <span>General</span>
+                <span>Contatos</span>
                 <span className="text-[10px] bg-white px-1 border border-gray-500">{contacts.length}</span>
             </div>
             <ul>
                 {contacts.map(contact => (
-                    <li 
+                    <li
                         key={contact.uin}
                         onDoubleClick={() => openChat(contact)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          if (!contact.isBot && confirm(`Remover ${contact.nickname} dos contatos?`)) {
+                            removeContact(contact.uin);
+                          }
+                        }}
                         className="px-2 py-1 hover:bg-[#000080] hover:text-white cursor-pointer flex items-center gap-2 group"
+                        title={`${contact.nickname} - ${contact.status}`}
                     >
                         <span className="group-hover:drop-shadow-none">
                             {contact.isBot ? STATUS_ICONS.BOT : STATUS_ICONS[contact.status]}
@@ -456,12 +536,116 @@ export default function App() {
             </ul>
         </div>
 
-        <div className="mt-2 flex justify-between">
-            <RetroButton className="flex-1 mr-1 text-xs">System</RetroButton>
-            <RetroButton className="flex-1 mr-1 text-xs">Add</RetroButton>
-            <RetroButton className="flex-1 text-xs">Menu</RetroButton>
+        <div className="mt-2 flex justify-between gap-1">
+            <RetroButton onClick={() => setShowAddContact(true)} className="flex-1 text-xs">Adicionar</RetroButton>
+            <RetroButton onClick={() => setShowMenu(!showMenu)} className="flex-1 text-xs">Menu</RetroButton>
         </div>
       </RetroWindow>
+
+      {/* Janela de Adicionar Contato */}
+      {showAddContact && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <RetroWindow
+            title="Adicionar Contato"
+            width="w-80"
+            height="h-96"
+            onClose={() => setShowAddContact(false)}
+            isActive={true}
+          >
+            <div className="flex-1 overflow-y-auto bg-white border-2 border-t-black border-l-black border-b-white border-r-white">
+              <div className="bg-[#c0c0c0] px-1 py-0.5 text-xs font-bold border-b border-gray-400">
+                Usuários Disponíveis ({allUsers.length})
+              </div>
+              <ul>
+                {allUsers
+                  .filter(user => !contacts.find(c => c.uin === user.uin))
+                  .map(user => (
+                    <li
+                      key={user.uin}
+                      onDoubleClick={() => addContact(user)}
+                      className="px-2 py-1 hover:bg-[#000080] hover:text-white cursor-pointer flex items-center gap-2 group"
+                    >
+                      <span className="group-hover:drop-shadow-none">
+                        {STATUS_ICONS[user.status]}
+                      </span>
+                      <div className="flex-1">
+                        <div className="text-sm font-bold">{user.nickname}</div>
+                        <div className="text-[10px] text-gray-600 group-hover:text-gray-300">UIN: {user.uin}</div>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addContact(user);
+                        }}
+                        className="text-[10px] px-1 border border-gray-400 bg-gray-200 group-hover:bg-white group-hover:text-black"
+                      >
+                        +
+                      </button>
+                    </li>
+                  ))}
+                {allUsers.filter(user => !contacts.find(c => c.uin === user.uin)).length === 0 && (
+                  <li className="px-2 py-2 text-sm text-gray-500 text-center">
+                    Nenhum novo usuário disponível
+                  </li>
+                )}
+              </ul>
+            </div>
+            <div className="mt-2">
+              <RetroButton onClick={() => setShowAddContact(false)} className="w-full">Fechar</RetroButton>
+            </div>
+          </RetroWindow>
+        </div>
+      )}
+
+      {/* Menu Dropdown */}
+      {showMenu && (
+        <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)}>
+          <div
+            className="absolute left-4 bottom-20 w-48 bg-[#c0c0c0] border-2 border-t-white border-l-white border-b-black border-r-black shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="px-3 py-2 hover:bg-[#000080] hover:text-white cursor-pointer text-sm border-b border-gray-400"
+              onClick={() => {
+                setShowMenu(false);
+                alert('Perfil: Funcionalidade em desenvolvimento');
+              }}
+            >
+              👤 Meu Perfil
+            </div>
+            <div
+              className="px-3 py-2 hover:bg-[#000080] hover:text-white cursor-pointer text-sm border-b border-gray-400"
+              onClick={() => {
+                setShowMenu(false);
+                alert('Configurações: Funcionalidade em desenvolvimento');
+              }}
+            >
+              ⚙️ Configurações
+            </div>
+            <div
+              className="px-3 py-2 hover:bg-[#000080] hover:text-white cursor-pointer text-sm border-b border-gray-400"
+              onClick={() => {
+                setShowMenu(false);
+                const sobre = `ICQ Reloaded v1.0\n\nChat retrô estilo Windows 95\nCom IA integrada (GeminiBot)\n\nDesenvolvido com React + Firebase`;
+                alert(sobre);
+              }}
+            >
+              ℹ️ Sobre
+            </div>
+            <div
+              className="px-3 py-2 hover:bg-[#000080] hover:text-white cursor-pointer text-sm"
+              onClick={() => {
+                setShowMenu(false);
+                if (confirm('Deseja realmente sair?')) {
+                  setCurrentUser(null);
+                }
+              }}
+            >
+              🚪 Sair
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chat Windows */}
       {Object.values(chatSessions).map(session => {
@@ -482,8 +666,8 @@ export default function App() {
                 className={`fixed top-10 md:static md:block ${isActive ? 'z-50' : 'z-20'}`}
                 onClick={() => setActiveWindow(contact.uin)}
             >
-                <RetroWindow 
-                    title={`Message Session: ${contact.nickname}`}
+                <RetroWindow
+                    title={`Conversa: ${contact.nickname}`}
                     width="w-80 md:w-96"
                     height="h-[500px]"
                     icon={contact.isBot ? STATUS_ICONS.BOT : STATUS_ICONS[contact.status]}
@@ -493,7 +677,7 @@ export default function App() {
                     <div className="flex-1 mb-2 bg-white border-2 border-t-black border-l-black border-b-white border-r-white overflow-y-auto p-2 font-sans">
                         {session.messages.length === 0 && (
                             <div className="text-center text-gray-400 text-xs mt-4">
-                                Start chatting with {contact.nickname}...
+                                Comece a conversar com {contact.nickname}...
                             </div>
                         )}
                         {session.messages.map((msg, idx) => {
@@ -501,7 +685,7 @@ export default function App() {
                             return (
                                 <div key={msg.id} className="mb-2 text-sm">
                                     <div className={`font-bold text-xs mb-0.5 ${isMe ? 'text-blue-800' : 'text-red-800'}`}>
-                                        {isMe ? currentUser.nickname : contact.nickname} 
+                                        {isMe ? currentUser.nickname : contact.nickname}
                                         <span className="text-gray-500 font-normal ml-2 text-[10px]">
                                             {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                         </span>
@@ -516,14 +700,14 @@ export default function App() {
                     </div>
 
                     <div className="bg-[#c0c0c0] mb-1 flex items-center gap-1 p-0.5 border border-transparent">
-                        <button className="w-6 h-6 border border-gray-400 flex items-center justify-center font-serif font-bold text-xs hover:bg-gray-300">B</button>
+                        <button className="w-6 h-6 border border-gray-400 flex items-center justify-center font-serif font-bold text-xs hover:bg-gray-300">N</button>
                         <button className="w-6 h-6 border border-gray-400 flex items-center justify-center font-serif italic text-xs hover:bg-gray-300">I</button>
                         <div className="h-4 w-[1px] bg-gray-500 mx-1"></div>
                         <button className="w-6 h-6 hover:bg-gray-300 flex items-center justify-center text-xs">😊</button>
                     </div>
 
                     <div className="h-24 mb-2">
-                        <textarea 
+                        <textarea
                             className="w-full h-full resize-none border-2 border-t-black border-l-black border-b-white border-r-white p-1 text-sm outline-none font-sans"
                             value={session.draft}
                             onChange={(e) => {
@@ -535,14 +719,15 @@ export default function App() {
                                     sendMessage(contact.uin);
                                 }
                             }}
+                            placeholder="Digite sua mensagem..."
                         />
                     </div>
 
                     <div className="flex justify-between items-center">
                         <div className="flex gap-2">
-                             <RetroButton onClick={() => sendMessage(contact.uin)} className="w-20 border-2">Send</RetroButton>
+                             <RetroButton onClick={() => sendMessage(contact.uin)} className="w-20 border-2">Enviar</RetroButton>
                              <div className="text-[10px] text-gray-600 flex flex-col justify-center leading-3">
-                                 <span>Alt+S</span>
+                                 <span>Enter</span>
                              </div>
                         </div>
                     </div>
@@ -554,7 +739,7 @@ export default function App() {
       <div className="fixed bottom-0 left-0 w-full bg-[#c0c0c0] border-t-2 border-white flex justify-between px-2 py-1">
             <div className="flex items-center gap-2">
                 <RetroButton className="flex items-center gap-1 px-2">
-                     <span className="font-bold italic">Start</span>
+                     <span className="font-bold italic">Iniciar</span>
                 </RetroButton>
                 <div className="w-[2px] h-6 bg-gray-400 mx-1 border-r border-white"></div>
             </div>
