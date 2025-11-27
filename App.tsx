@@ -374,21 +374,21 @@ export default function App() {
                </div>
                <div className="flex flex-col gap-2 w-full">
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">ICQ #:</label>
-                    <RetroInput 
-                        value={loginUin} 
-                        onChange={e => setLoginUin(e.target.value)} 
-                        placeholder="Ex: 123456"
+                    <label className="text-xs mb-0.5">Login:</label>
+                    <RetroInput
+                        value={loginUin}
+                        onChange={e => setLoginUin(e.target.value)}
+                        placeholder="Ex: @LezMAN#!"
                         autoFocus
                     />
                   </div>
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">Password:</label>
-                    <RetroInput 
+                    <label className="text-xs mb-0.5">Senha:</label>
+                    <RetroInput
                         type="password"
                         value={loginPass}
                         onChange={e => setLoginPass(e.target.value)}
-                        placeholder="(Any for Demo)"
+                        placeholder="Nome1234"
                     />
                   </div>
                </div>
