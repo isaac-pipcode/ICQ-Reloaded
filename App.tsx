@@ -217,10 +217,15 @@ export default function App() {
      }
   };
 
+  const handleNewUser = () => {
+    setLoginUin('');
+    setLoginPass('');
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loginUin.length < 3) {
-      alert("Please enter a valid UIN (min 3 chars)");
+      alert("Por favor, insira um login válido (mín. 3 caracteres)");
       return;
     }
 
@@ -245,13 +250,26 @@ export default function App() {
         setCurrentUser(newUser);
 
     } catch (err: any) {
-        console.error("Login failed:", err);
-        let msg = "Could not connect to ICQ Network.";
-        if (err.code === 'auth/operation-not-allowed') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
+        console.error("Falha no login:", err);
+        let msg = "❌ Não foi possível conectar à rede ICQ.\n\n";
+
+        if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation') {
+            msg += "🔧 SOLUÇÃO:\n";
+            msg += "1. Acesse o Firebase Console (https://console.firebase.google.com)\n";
+            msg += "2. Selecione seu projeto\n";
+            msg += "3. Vá em Authentication → Sign-in method\n";
+            msg += "4. Ative a opção 'Anonymous'\n\n";
+            msg += "📋 Erro técnico: " + err.code;
         } else if (err.code === 'permission-denied') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Firestore Database -> Rules -> Change to 'allow read, write: if true;'";
+            msg += "🔧 SOLUÇÃO:\n";
+            msg += "1. Acesse o Firebase Console\n";
+            msg += "2. Vá em Firestore Database → Rules\n";
+            msg += "3. Altere as regras para: 'allow read, write: if true;'\n\n";
+            msg += "📋 Erro técnico: " + err.code;
+        } else {
+            msg += "📋 Erro técnico: " + (err.code || err.message);
         }
+
         alert(msg);
     }
   };
@@ -395,8 +413,8 @@ export default function App() {
             </div>
             
             <div className="flex justify-between items-center mt-2">
-                <div className="text-xs underline text-blue-800 cursor-pointer">New User?</div>
-                <RetroButton type="submit" className="w-24">Connect</RetroButton>
+                <div className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600" onClick={handleNewUser}>Novo Usuário?</div>
+                <RetroButton type="submit" className="w-24">Conectar</RetroButton>
             </div>
           </form>
         </RetroWindow>
