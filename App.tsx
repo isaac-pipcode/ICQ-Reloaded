@@ -18,7 +18,7 @@ import {
   serverTimestamp,
   updateDoc
 } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 
 // --- Sound Utility ---
 const playUhOh = () => {
@@ -67,6 +67,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginUin, setLoginUin] = useState('');
   const [loginPass, setLoginPass] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
   
   // Default contacts (Bots/System)
   const defaultContacts = [
@@ -218,47 +219,109 @@ export default function App() {
   };
 
   const handleNewUser = () => {
+    setIsRegistering(!isRegistering);
     setLoginUin('');
     setLoginPass('');
   };
 
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginUin.length < 3) {
-      alert("Por favor, insira um login válido (mín. 3 caracteres)");
+
+    // Validação de email
+    if (!validateEmail(loginUin)) {
+      alert("❌ Por favor, insira um email válido.\n\nExemplo: seu.nome@exemplo.com");
+      return;
+    }
+
+    // Validação de senha
+    if (loginPass.length < 6) {
+      alert("❌ A senha deve ter no mínimo 6 caracteres.");
       return;
     }
 
     try {
-        await signInAnonymously(auth);
+        let userCredential;
 
-        const newUser: User = {
-            uin: loginUin,
-            nickname: loginUin === '111111' ? 'Admin' : `User_${loginUin}`,
-            email: 'user@web.net',
-            status: UserStatus.ONLINE
-        };
+        if (isRegistering) {
+            // MODO REGISTRO - Criar nova conta
+            userCredential = await createUserWithEmailAndPassword(auth, loginUin, loginPass);
 
-        // Update or Set user data
-        // If this fails, it throws, so we catch it below
-        await setDoc(doc(db, "users", loginUin), {
-            ...newUser,
-            lastSeen: serverTimestamp()
-        });
+            // Gerar UIN único baseado no timestamp e ID do usuário
+            const uin = userCredential.user.uid.substring(0, 8);
+            const nickname = loginUin.split('@')[0];
 
-        playUhOh();
-        setCurrentUser(newUser);
+            const newUser: User = {
+                uin: uin,
+                nickname: nickname,
+                email: loginUin,
+                status: UserStatus.ONLINE
+            };
+
+            // Salvar dados do usuário no Firestore
+            await setDoc(doc(db, "users", uin), {
+                ...newUser,
+                lastSeen: serverTimestamp()
+            });
+
+            playUhOh();
+            setCurrentUser(newUser);
+            alert("✅ Conta criada com sucesso!\n\nBem-vindo ao ICQ Reloaded!");
+
+        } else {
+            // MODO LOGIN - Entrar com conta existente
+            userCredential = await signInWithEmailAndPassword(auth, loginUin, loginPass);
+
+            // Buscar dados do usuário no Firestore
+            const uin = userCredential.user.uid.substring(0, 8);
+
+            const existingUser: User = {
+                uin: uin,
+                nickname: loginUin.split('@')[0],
+                email: loginUin,
+                status: UserStatus.ONLINE
+            };
+
+            // Atualizar status e lastSeen
+            await setDoc(doc(db, "users", uin), {
+                ...existingUser,
+                lastSeen: serverTimestamp()
+            }, { merge: true });
+
+            playUhOh();
+            setCurrentUser(existingUser);
+        }
 
     } catch (err: any) {
         console.error("Falha no login:", err);
-        let msg = "❌ Não foi possível conectar à rede ICQ.\n\n";
+        let msg = "❌ Não foi possível " + (isRegistering ? "criar conta" : "fazer login") + ".\n\n";
 
-        if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation') {
+        // Erros específicos de autenticação
+        if (err.code === 'auth/email-already-in-use') {
+            msg += "Este email já está em uso.\n\n";
+            msg += "💡 Dica: Use o modo de login ou tente outro email.";
+        } else if (err.code === 'auth/invalid-email') {
+            msg += "Email inválido.\n\n";
+            msg += "💡 Use um formato válido: exemplo@dominio.com";
+        } else if (err.code === 'auth/weak-password') {
+            msg += "Senha muito fraca.\n\n";
+            msg += "💡 Use no mínimo 6 caracteres.";
+        } else if (err.code === 'auth/user-not-found') {
+            msg += "Usuário não encontrado.\n\n";
+            msg += "💡 Verifique o email ou crie uma nova conta.";
+        } else if (err.code === 'auth/wrong-password') {
+            msg += "Senha incorreta.\n\n";
+            msg += "💡 Verifique sua senha e tente novamente.";
+        } else if (err.code === 'auth/operation-not-allowed') {
             msg += "🔧 SOLUÇÃO:\n";
             msg += "1. Acesse o Firebase Console (https://console.firebase.google.com)\n";
             msg += "2. Selecione seu projeto\n";
             msg += "3. Vá em Authentication → Sign-in method\n";
-            msg += "4. Ative a opção 'Anonymous'\n\n";
+            msg += "4. Ative a opção 'Email/Password'\n\n";
             msg += "📋 Erro técnico: " + err.code;
         } else if (err.code === 'permission-denied') {
             msg += "🔧 SOLUÇÃO:\n";
@@ -382,7 +445,7 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="h-screen w-screen flex items-center justify-center relative">
-        <RetroWindow title="ICQ Login" width="w-80" icon={FLOWER_ICON}>
+        <RetroWindow title={isRegistering ? "ICQ - Criar Conta" : "ICQ - Login"} width="w-80" icon={FLOWER_ICON}>
           <form onSubmit={handleLogin} className="flex flex-col gap-4 py-4">
             <div className="flex items-center gap-4">
                <div className="w-16 h-16 bg-gray-300 border-2 border-gray-500 inset shadow-inner flex items-center justify-center">
@@ -392,11 +455,11 @@ export default function App() {
                </div>
                <div className="flex flex-col gap-2 w-full">
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">Login:</label>
+                    <label className="text-xs mb-0.5">Email:</label>
                     <RetroInput
                         value={loginUin}
                         onChange={e => setLoginUin(e.target.value)}
-                        placeholder="Ex: @LezMAN#!"
+                        placeholder="exemplo@email.com"
                         autoFocus
                     />
                   </div>
@@ -406,15 +469,19 @@ export default function App() {
                         type="password"
                         value={loginPass}
                         onChange={e => setLoginPass(e.target.value)}
-                        placeholder="Nome1234"
+                        placeholder="Mínimo 6 caracteres"
                     />
                   </div>
                </div>
             </div>
-            
+
             <div className="flex justify-between items-center mt-2">
-                <div className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600" onClick={handleNewUser}>Novo Usuário?</div>
-                <RetroButton type="submit" className="w-24">Conectar</RetroButton>
+                <div className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600" onClick={handleNewUser}>
+                    {isRegistering ? "Já tem conta? Entrar" : "Novo Usuário?"}
+                </div>
+                <RetroButton type="submit" className="w-24">
+                    {isRegistering ? "Registrar" : "Conectar"}
+                </RetroButton>
             </div>
           </form>
         </RetroWindow>
