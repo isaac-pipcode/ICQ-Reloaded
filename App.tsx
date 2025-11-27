@@ -7,18 +7,25 @@ import { getBotResponse } from './services/geminiService';
 
 // --- Firebase Imports ---
 import { db, auth } from './firebaseConfig';
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  limit, 
-  setDoc, 
-  doc, 
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  limit,
+  setDoc,
+  doc,
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  getDoc
 } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  onAuthStateChanged,
+  signOut
+} from 'firebase/auth';
 
 // --- Sound Utility ---
 const playUhOh = () => {
@@ -65,8 +72,11 @@ const playMsgSound = () => {
 export default function App() {
   // --- State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [loginUin, setLoginUin] = useState('');
-  const [loginPass, setLoginPass] = useState('');
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [loading, setLoading] = useState(true);
   
   // Default contacts (Bots/System)
   const defaultContacts = [
@@ -80,6 +90,45 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // --- Firebase Logic ---
+
+  // 0. Auth State Listener (Session Management)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // User is logged in, fetch their data from Firestore
+        try {
+          const userDocRef = doc(db, "users", firebaseUser.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            setCurrentUser({
+              uin: firebaseUser.uid,
+              nickname: userData.nickname || firebaseUser.email?.split('@')[0] || 'User',
+              email: firebaseUser.email || '',
+              status: UserStatus.ONLINE
+            });
+          } else {
+            // Document doesn't exist yet (shouldn't happen, but handle it)
+            setCurrentUser({
+              uin: firebaseUser.uid,
+              nickname: firebaseUser.email?.split('@')[0] || 'User',
+              email: firebaseUser.email || '',
+              status: UserStatus.ONLINE
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error);
+        }
+      } else {
+        // User is logged out
+        setCurrentUser(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // 1. Auth & Presence Listener
   useEffect(() => {
@@ -217,42 +266,183 @@ export default function App() {
      }
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // --- Authentication Functions ---
+
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 6) {
+      return "Password must be at least 6 characters";
+    }
+    if (!/[A-Za-z]/.test(password)) {
+      return "Password must contain at least one letter";
+    }
+    if (!/[0-9]/.test(password)) {
+      return "Password must contain at least one number";
+    }
+    return null;
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginUin.length < 3) {
-      alert("Please enter a valid UIN (min 3 chars)");
+
+    // Validation
+    if (!validateEmail(email)) {
+      alert("Please enter a valid email address");
+      return;
+    }
+
+    if (!nickname.trim()) {
+      alert("Please enter a nickname");
+      return;
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      alert(passwordError);
       return;
     }
 
     try {
-        await signInAnonymously(auth);
+      setLoading(true);
+      // Create Firebase Auth user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
 
-        const newUser: User = {
-            uin: loginUin,
-            nickname: loginUin === '111111' ? 'Admin' : `User_${loginUin}`,
-            email: 'user@web.net',
-            status: UserStatus.ONLINE
-        };
+      // Create Firestore user document
+      await setDoc(doc(db, "users", firebaseUser.uid), {
+        uin: firebaseUser.uid,
+        nickname: nickname.trim(),
+        email: email,
+        status: UserStatus.ONLINE,
+        createdAt: serverTimestamp(),
+        lastSeen: serverTimestamp()
+      });
 
-        // Update or Set user data
-        // If this fails, it throws, so we catch it below
-        await setDoc(doc(db, "users", loginUin), {
-            ...newUser,
-            lastSeen: serverTimestamp()
-        });
-
-        playUhOh();
-        setCurrentUser(newUser);
+      playUhOh();
+      alert("Account created successfully! Welcome to ICQ!");
 
     } catch (err: any) {
-        console.error("Login failed:", err);
-        let msg = "Could not connect to ICQ Network.";
-        if (err.code === 'auth/operation-not-allowed') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
-        } else if (err.code === 'permission-denied') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Firestore Database -> Rules -> Change to 'allow read, write: if true;'";
-        }
-        alert(msg);
+      console.error("Registration failed:", err);
+      let msg = "Registration failed. ";
+
+      if (err.code === 'auth/email-already-in-use') {
+        msg += "This email is already registered. Please login instead.";
+      } else if (err.code === 'auth/invalid-email') {
+        msg += "Invalid email address.";
+      } else if (err.code === 'auth/operation-not-allowed') {
+        msg += "\n\nSOLUTION: Enable Email/Password authentication in Firebase Console -> Authentication -> Sign-in method.";
+      } else if (err.code === 'auth/weak-password') {
+        msg += "Password is too weak.";
+      } else {
+        msg += err.message || "Unknown error occurred.";
+      }
+
+      alert(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // Validation
+    if (!validateEmail(email)) {
+      alert("Please enter a valid email address");
+      return;
+    }
+
+    if (!password) {
+      alert("Please enter your password");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      // Sign in with Firebase Auth
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      // Update user status to online
+      await updateDoc(doc(db, "users", firebaseUser.uid), {
+        status: UserStatus.ONLINE,
+        lastSeen: serverTimestamp()
+      });
+
+      playUhOh();
+
+    } catch (err: any) {
+      console.error("Login failed:", err);
+      let msg = "Login failed. ";
+
+      if (err.code === 'auth/user-not-found') {
+        msg += "No account found with this email. Please register first.";
+      } else if (err.code === 'auth/wrong-password') {
+        msg += "Incorrect password.";
+      } else if (err.code === 'auth/invalid-email') {
+        msg += "Invalid email address.";
+      } else if (err.code === 'auth/too-many-requests') {
+        msg += "Too many failed attempts. Please try again later.";
+      } else if (err.code === 'auth/invalid-credential') {
+        msg += "Invalid credentials. Please check your email and password.";
+      } else {
+        msg += err.message || "Unknown error occurred.";
+      }
+
+      alert(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!validateEmail(email)) {
+      alert("Please enter a valid email address");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await sendPasswordResetEmail(auth, email);
+      alert("Password reset email sent! Check your inbox.");
+      setAuthMode('login');
+    } catch (err: any) {
+      console.error("Password reset failed:", err);
+      let msg = "Password reset failed. ";
+
+      if (err.code === 'auth/user-not-found') {
+        msg += "No account found with this email.";
+      } else if (err.code === 'auth/invalid-email') {
+        msg += "Invalid email address.";
+      } else {
+        msg += err.message || "Unknown error occurred.";
+      }
+
+      alert(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!currentUser) return;
+
+    try {
+      // Update status to offline
+      await updateDoc(doc(db, "users", currentUser.uin), {
+        status: UserStatus.OFFLINE,
+        lastSeen: serverTimestamp()
+      });
+
+      await signOut(auth);
+    } catch (err) {
+      console.error("Logout failed:", err);
     }
   };
 
@@ -361,42 +551,112 @@ export default function App() {
 
   // --- Render ---
 
+  if (loading && !currentUser) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
       <div className="h-screen w-screen flex items-center justify-center relative">
-        <RetroWindow title="ICQ Login" width="w-80" icon={FLOWER_ICON}>
-          <form onSubmit={handleLogin} className="flex flex-col gap-4 py-4">
+        <RetroWindow
+          title={authMode === 'login' ? 'ICQ Login' : authMode === 'register' ? 'ICQ Registration' : 'Reset Password'}
+          width="w-96"
+          icon={FLOWER_ICON}
+        >
+          <form
+            onSubmit={authMode === 'login' ? handleLogin : authMode === 'register' ? handleRegister : handleForgotPassword}
+            className="flex flex-col gap-4 py-4"
+          >
             <div className="flex items-center gap-4">
-               <div className="w-16 h-16 bg-gray-300 border-2 border-gray-500 inset shadow-inner flex items-center justify-center">
+               <div className="w-16 h-16 bg-gray-300 border-2 border-gray-500 inset shadow-inner flex items-center justify-center flex-shrink-0">
                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
                        <path d="M12 2C13.1 2 14 2.9 14 4V9.17C14.83 8.64 15.93 8.64 16.76 9.17L21.09 6.67C22.04 6.12 23.26 6.45 23.81 7.4C24.36 8.35 24.03 9.57 23.08 10.12L18.75 12.62C18.75 13.6 18.75 14.58 18.75 15.56L23.08 18.06C24.03 18.61 24.36 19.83 23.81 20.78C23.26 21.73 22.04 22.06 21.09 21.51L16.76 19.01C15.93 19.54 14.83 19.54 14 19.01V24.18C14 25.28 13.1 26.18 12 26.18C10.9 26.18 10 25.28 10 24.18V19.01C9.17 19.54 8.07 19.54 7.24 19.01L2.91 21.51C1.96 22.06 0.74 21.73 0.19 20.78C-0.36 19.83 -0.03 18.61 0.92 18.06L5.25 15.56C5.25 14.58 5.25 13.6 5.25 12.62L0.92 10.12C-0.03 9.57 -0.36 8.35 0.19 7.4C0.74 6.45 1.96 6.12 2.91 6.67L7.24 9.17C8.07 8.64 9.17 8.64 10 9.17V4C10 2.9 10.9 2 12 2Z" fill="#008000"/>
                    </svg>
                </div>
                <div className="flex flex-col gap-2 w-full">
+                  {authMode === 'register' && (
+                    <div className="flex flex-col">
+                      <label className="text-xs mb-0.5">Nickname:</label>
+                      <RetroInput
+                          value={nickname}
+                          onChange={e => setNickname(e.target.value)}
+                          placeholder="Your display name"
+                          autoFocus
+                      />
+                    </div>
+                  )}
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">ICQ #:</label>
-                    <RetroInput 
-                        value={loginUin} 
-                        onChange={e => setLoginUin(e.target.value)} 
-                        placeholder="Ex: 123456"
-                        autoFocus
+                    <label className="text-xs mb-0.5">Email:</label>
+                    <RetroInput
+                        type="email"
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        placeholder="user@example.com"
+                        autoFocus={authMode !== 'register'}
                     />
                   </div>
-                  <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">Password:</label>
-                    <RetroInput 
-                        type="password"
-                        value={loginPass}
-                        onChange={e => setLoginPass(e.target.value)}
-                        placeholder="(Any for Demo)"
-                    />
-                  </div>
+                  {authMode !== 'forgot' && (
+                    <div className="flex flex-col">
+                      <label className="text-xs mb-0.5">Password:</label>
+                      <RetroInput
+                          type="password"
+                          value={password}
+                          onChange={e => setPassword(e.target.value)}
+                          placeholder={authMode === 'register' ? '6+ chars, 1 letter, 1 number' : 'Your password'}
+                      />
+                    </div>
+                  )}
                </div>
             </div>
-            
+
+            {authMode === 'register' && (
+              <div className="text-xs text-gray-600 -mt-2">
+                Password must be at least 6 characters with 1 letter and 1 number
+              </div>
+            )}
+
             <div className="flex justify-between items-center mt-2">
-                <div className="text-xs underline text-blue-800 cursor-pointer">New User?</div>
-                <RetroButton type="submit" className="w-24">Connect</RetroButton>
+                <div className="flex flex-col gap-1">
+                  {authMode === 'login' && (
+                    <>
+                      <div
+                        className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600"
+                        onClick={() => setAuthMode('register')}
+                      >
+                        New User? Register
+                      </div>
+                      <div
+                        className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600"
+                        onClick={() => setAuthMode('forgot')}
+                      >
+                        Forgot Password?
+                      </div>
+                    </>
+                  )}
+                  {authMode === 'register' && (
+                    <div
+                      className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600"
+                      onClick={() => setAuthMode('login')}
+                    >
+                      Already have an account? Login
+                    </div>
+                  )}
+                  {authMode === 'forgot' && (
+                    <div
+                      className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600"
+                      onClick={() => setAuthMode('login')}
+                    >
+                      Back to Login
+                    </div>
+                  )}
+                </div>
+                <RetroButton type="submit" className="w-24" disabled={loading}>
+                  {loading ? 'Wait...' : authMode === 'login' ? 'Login' : authMode === 'register' ? 'Register' : 'Reset'}
+                </RetroButton>
             </div>
           </form>
         </RetroWindow>
@@ -408,13 +668,13 @@ export default function App() {
     <div className="h-screen w-screen p-4 flex gap-4 flex-wrap items-start justify-center md:justify-start">
       
       {/* Contact List */}
-      <RetroWindow 
-        title={`${currentUser.uin} - ${currentUser.nickname}`} 
-        width="w-64" 
-        height="h-[80vh] min-h-[400px]" 
+      <RetroWindow
+        title={`${currentUser.nickname}`}
+        width="w-64"
+        height="h-[80vh] min-h-[400px]"
         icon={FLOWER_ICON}
         onMinimize={() => {}}
-        onClose={() => setCurrentUser(null)}
+        onClose={handleLogout}
         className="z-10"
       >
         <div className="mb-2 flex items-center justify-between border-b border-white pb-1">
