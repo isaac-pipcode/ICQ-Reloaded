@@ -7,18 +7,21 @@ import { getBotResponse } from './services/geminiService';
 
 // --- Firebase Imports ---
 import { db, auth } from './firebaseConfig';
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  limit, 
-  setDoc, 
-  doc, 
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  limit,
+  setDoc,
+  doc,
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  getDoc,
+  getDocs,
+  arrayUnion
 } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 
 // --- Sound Utility ---
 const playUhOh = () => {
@@ -67,6 +70,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loginUin, setLoginUin] = useState('');
   const [loginPass, setLoginPass] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
   
   // Default contacts (Bots/System)
   const defaultContacts = [
@@ -86,21 +90,26 @@ export default function App() {
     // CRITICAL FIX: Do not attempt to listen to users if not logged in locally OR if Firebase Auth isn't ready.
     if (!currentUser) return;
     if (!auth.currentUser) {
-        console.warn("Waiting for Firebase Auth to initialize...");
+        console.warn("Aguardando inicialização do Firebase Auth...");
         return;
     }
 
     // Simplified query to avoid index errors
     const q = query(collection(db, "users"), limit(50));
-    
-    const unsubscribeUsers = onSnapshot(q, 
+
+    const unsubscribeUsers = onSnapshot(q,
       (snapshot) => {
         const onlineUsers: User[] = [];
+        const userContacts = currentUser.contacts || []; // Lista de contatos do usuário
+
         snapshot.forEach((doc) => {
           const data = doc.data();
           // Don't show myself in the list
           if (currentUser && data.uin === currentUser.uin) return;
-          
+
+          // PRIVACIDADE: Só mostrar usuários que estão na minha lista de contatos
+          if (!userContacts.includes(data.uin)) return;
+
           onlineUsers.push({
             uin: data.uin,
             nickname: data.nickname,
@@ -109,14 +118,14 @@ export default function App() {
             isBot: false
           });
         });
-        
+
         // Merge Firebase users with Bot users
         setContacts([...defaultContacts, ...onlineUsers]);
       },
       (error) => {
-        console.error("Firebase Users Listener Error:", error);
+        console.error("Erro no Listener de Usuários:", error);
         if (error.code === 'permission-denied') {
-            alert("ACCESS DENIED: Please check your Firebase Console Rules. They must be 'allow read, write: if true;' for this demo.");
+            alert("ACESSO NEGADO: Verifique as regras do Firebase Console. Devem estar como 'allow read, write: if true;' para esta demo.");
         }
       }
     );
@@ -217,41 +226,192 @@ export default function App() {
      }
   };
 
+  const handleNewUser = () => {
+    setIsRegistering(!isRegistering);
+    setLoginUin('');
+    setLoginPass('');
+  };
+
+  const handleAddContact = async () => {
+    if (!currentUser) return;
+
+    const contactEmail = prompt("Digite o email do contato que deseja adicionar:");
+    if (!contactEmail || !contactEmail.trim()) return;
+
+    try {
+      // Buscar todos os usuários para encontrar o email
+      const usersRef = collection(db, "users");
+      const q = query(usersRef);
+      const snapshot = await getDocs(q);
+
+      let foundContact: any = null;
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.email === contactEmail.trim()) {
+          foundContact = { uin: data.uin, nickname: data.nickname, email: data.email };
+        }
+      });
+
+      if (!foundContact) {
+        alert("❌ Usuário não encontrado.\n\nVerifique se o email está correto e se o usuário já criou uma conta.");
+        return;
+      }
+
+      // Verificar se já é contato
+      if (currentUser.contacts?.includes(foundContact.uin)) {
+        alert("ℹ️ Este usuário já está na sua lista de contatos.");
+        return;
+      }
+
+      // Adicionar à lista de contatos
+      const userRef = doc(db, "users", currentUser.uin);
+      await updateDoc(userRef, {
+        contacts: arrayUnion(foundContact.uin)
+      });
+
+      // Atualizar estado local
+      setCurrentUser({
+        ...currentUser,
+        contacts: [...(currentUser.contacts || []), foundContact.uin]
+      });
+
+      playUhOh();
+      alert(`✅ ${foundContact.nickname} foi adicionado aos seus contatos!`);
+
+    } catch (error: any) {
+      console.error("Erro ao adicionar contato:", error);
+      alert("❌ Erro ao adicionar contato. Tente novamente.");
+    }
+  };
+
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginUin.length < 3) {
-      alert("Please enter a valid UIN (min 3 chars)");
+
+    // Validação de email
+    if (!validateEmail(loginUin)) {
+      alert("❌ Por favor, insira um email válido.\n\nExemplo: seu.nome@exemplo.com");
+      return;
+    }
+
+    // Validação de senha
+    if (loginPass.length < 6) {
+      alert("❌ A senha deve ter no mínimo 6 caracteres.");
       return;
     }
 
     try {
-        await signInAnonymously(auth);
+        let userCredential;
 
-        const newUser: User = {
-            uin: loginUin,
-            nickname: loginUin === '111111' ? 'Admin' : `User_${loginUin}`,
-            email: 'user@web.net',
-            status: UserStatus.ONLINE
-        };
+        if (isRegistering) {
+            // MODO REGISTRO - Criar nova conta
+            userCredential = await createUserWithEmailAndPassword(auth, loginUin, loginPass);
 
-        // Update or Set user data
-        // If this fails, it throws, so we catch it below
-        await setDoc(doc(db, "users", loginUin), {
-            ...newUser,
-            lastSeen: serverTimestamp()
-        });
+            // Gerar UIN único baseado no timestamp e ID do usuário
+            const uin = userCredential.user.uid.substring(0, 8);
+            const nickname = loginUin.split('@')[0];
 
-        playUhOh();
-        setCurrentUser(newUser);
+            const newUser: User = {
+                uin: uin,
+                nickname: nickname,
+                email: loginUin,
+                status: UserStatus.ONLINE,
+                contacts: [] // Inicializar lista de contatos vazia
+            };
+
+            // Salvar dados do usuário no Firestore
+            await setDoc(doc(db, "users", uin), {
+                ...newUser,
+                lastSeen: serverTimestamp()
+            });
+
+            playUhOh();
+            setCurrentUser(newUser);
+            alert("✅ Conta criada com sucesso!\n\nBem-vindo ao ICQ Reloaded!");
+
+        } else {
+            // MODO LOGIN - Entrar com conta existente
+            userCredential = await signInWithEmailAndPassword(auth, loginUin, loginPass);
+
+            // Buscar dados do usuário no Firestore
+            const uin = userCredential.user.uid.substring(0, 8);
+            const userRef = doc(db, "users", uin);
+            const userDoc = await getDoc(userRef);
+
+            let existingUser: User;
+
+            if (userDoc.exists()) {
+                // Usuário já existe, buscar dados completos
+                const userData = userDoc.data();
+                existingUser = {
+                    uin: uin,
+                    nickname: userData.nickname || loginUin.split('@')[0],
+                    email: loginUin,
+                    status: UserStatus.ONLINE,
+                    contacts: userData.contacts || [] // Buscar lista de contatos
+                };
+            } else {
+                // Primeiro login, criar documento
+                existingUser = {
+                    uin: uin,
+                    nickname: loginUin.split('@')[0],
+                    email: loginUin,
+                    status: UserStatus.ONLINE,
+                    contacts: []
+                };
+            }
+
+            // Atualizar status e lastSeen
+            await setDoc(userRef, {
+                ...existingUser,
+                lastSeen: serverTimestamp()
+            }, { merge: true });
+
+            playUhOh();
+            setCurrentUser(existingUser);
+        }
 
     } catch (err: any) {
-        console.error("Login failed:", err);
-        let msg = "Could not connect to ICQ Network.";
-        if (err.code === 'auth/operation-not-allowed') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
+        console.error("Falha no login:", err);
+        let msg = "❌ Não foi possível " + (isRegistering ? "criar conta" : "fazer login") + ".\n\n";
+
+        // Erros específicos de autenticação
+        if (err.code === 'auth/email-already-in-use') {
+            msg += "Este email já está em uso.\n\n";
+            msg += "💡 Dica: Use o modo de login ou tente outro email.";
+        } else if (err.code === 'auth/invalid-email') {
+            msg += "Email inválido.\n\n";
+            msg += "💡 Use um formato válido: exemplo@dominio.com";
+        } else if (err.code === 'auth/weak-password') {
+            msg += "Senha muito fraca.\n\n";
+            msg += "💡 Use no mínimo 6 caracteres.";
+        } else if (err.code === 'auth/user-not-found') {
+            msg += "Usuário não encontrado.\n\n";
+            msg += "💡 Verifique o email ou crie uma nova conta.";
+        } else if (err.code === 'auth/wrong-password') {
+            msg += "Senha incorreta.\n\n";
+            msg += "💡 Verifique sua senha e tente novamente.";
+        } else if (err.code === 'auth/operation-not-allowed') {
+            msg += "🔧 SOLUÇÃO:\n";
+            msg += "1. Acesse o Firebase Console (https://console.firebase.google.com)\n";
+            msg += "2. Selecione seu projeto\n";
+            msg += "3. Vá em Authentication → Sign-in method\n";
+            msg += "4. Ative a opção 'Email/Password'\n\n";
+            msg += "📋 Erro técnico: " + err.code;
         } else if (err.code === 'permission-denied') {
-            msg += "\n\nSOLUTION: Go to Firebase Console -> Firestore Database -> Rules -> Change to 'allow read, write: if true;'";
+            msg += "🔧 SOLUÇÃO:\n";
+            msg += "1. Acesse o Firebase Console\n";
+            msg += "2. Vá em Firestore Database → Rules\n";
+            msg += "3. Altere as regras para: 'allow read, write: if true;'\n\n";
+            msg += "📋 Erro técnico: " + err.code;
+        } else {
+            msg += "📋 Erro técnico: " + (err.code || err.message);
         }
+
         alert(msg);
     }
   };
@@ -364,7 +524,7 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="h-screen w-screen flex items-center justify-center relative">
-        <RetroWindow title="ICQ Login" width="w-80" icon={FLOWER_ICON}>
+        <RetroWindow title={isRegistering ? "ICQ - Criar Conta" : "ICQ - Login"} width="w-80" icon={FLOWER_ICON}>
           <form onSubmit={handleLogin} className="flex flex-col gap-4 py-4">
             <div className="flex items-center gap-4">
                <div className="w-16 h-16 bg-gray-300 border-2 border-gray-500 inset shadow-inner flex items-center justify-center">
@@ -374,29 +534,33 @@ export default function App() {
                </div>
                <div className="flex flex-col gap-2 w-full">
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">ICQ #:</label>
-                    <RetroInput 
-                        value={loginUin} 
-                        onChange={e => setLoginUin(e.target.value)} 
-                        placeholder="Ex: 123456"
+                    <label className="text-xs mb-0.5">Email:</label>
+                    <RetroInput
+                        value={loginUin}
+                        onChange={e => setLoginUin(e.target.value)}
+                        placeholder="exemplo@email.com"
                         autoFocus
                     />
                   </div>
                   <div className="flex flex-col">
-                    <label className="text-xs mb-0.5">Password:</label>
-                    <RetroInput 
+                    <label className="text-xs mb-0.5">Senha:</label>
+                    <RetroInput
                         type="password"
                         value={loginPass}
                         onChange={e => setLoginPass(e.target.value)}
-                        placeholder="(Any for Demo)"
+                        placeholder="Mínimo 6 caracteres"
                     />
                   </div>
                </div>
             </div>
-            
+
             <div className="flex justify-between items-center mt-2">
-                <div className="text-xs underline text-blue-800 cursor-pointer">New User?</div>
-                <RetroButton type="submit" className="w-24">Connect</RetroButton>
+                <div className="text-xs underline text-blue-800 cursor-pointer hover:text-blue-600" onClick={handleNewUser}>
+                    {isRegistering ? "Já tem conta? Entrar" : "Novo Usuário?"}
+                </div>
+                <RetroButton type="submit" className="w-24">
+                    {isRegistering ? "Registrar" : "Conectar"}
+                </RetroButton>
             </div>
           </form>
         </RetroWindow>
@@ -423,21 +587,21 @@ export default function App() {
                 <span className="text-sm font-bold">{currentUser.status}</span>
                 <span className="ml-1 text-[10px]">▼</span>
              </div>
-             <div className="text-xs italic text-gray-500">Net Detect: ON</div>
+             <div className="text-xs italic text-gray-500">Detecção de Rede: ON</div>
         </div>
 
         <div className="mb-2">
             <SunkenContainer>
                 <div className="flex items-center bg-white px-1">
                     <span className="text-gray-400 mr-1">🔍</span>
-                    <input className="w-full text-sm outline-none" placeholder="Search contact..." />
+                    <input className="w-full text-sm outline-none" placeholder="Buscar contato..." />
                 </div>
             </SunkenContainer>
         </div>
 
         <div className="flex-1 overflow-y-auto bg-white border-2 border-t-black border-l-black border-b-white border-r-white">
             <div className="bg-[#c0c0c0] px-1 py-0.5 text-xs font-bold border-b border-gray-400 flex justify-between items-center">
-                <span>General</span>
+                <span>Contatos</span>
                 <span className="text-[10px] bg-white px-1 border border-gray-500">{contacts.length}</span>
             </div>
             <ul>
@@ -456,10 +620,9 @@ export default function App() {
             </ul>
         </div>
 
-        <div className="mt-2 flex justify-between">
-            <RetroButton className="flex-1 mr-1 text-xs">System</RetroButton>
-            <RetroButton className="flex-1 mr-1 text-xs">Add</RetroButton>
-            <RetroButton className="flex-1 text-xs">Menu</RetroButton>
+        <div className="mt-2 flex justify-between gap-1">
+            <RetroButton onClick={handleAddContact} className="flex-1 text-xs">Adicionar</RetroButton>
+            <RetroButton onClick={() => setCurrentUser(null)} className="flex-1 text-xs">Sair</RetroButton>
         </div>
       </RetroWindow>
 
@@ -482,8 +645,8 @@ export default function App() {
                 className={`fixed top-10 md:static md:block ${isActive ? 'z-50' : 'z-20'}`}
                 onClick={() => setActiveWindow(contact.uin)}
             >
-                <RetroWindow 
-                    title={`Message Session: ${contact.nickname}`}
+                <RetroWindow
+                    title={`Conversa: ${contact.nickname}`}
                     width="w-80 md:w-96"
                     height="h-[500px]"
                     icon={contact.isBot ? STATUS_ICONS.BOT : STATUS_ICONS[contact.status]}
@@ -493,7 +656,7 @@ export default function App() {
                     <div className="flex-1 mb-2 bg-white border-2 border-t-black border-l-black border-b-white border-r-white overflow-y-auto p-2 font-sans">
                         {session.messages.length === 0 && (
                             <div className="text-center text-gray-400 text-xs mt-4">
-                                Start chatting with {contact.nickname}...
+                                Comece a conversar com {contact.nickname}...
                             </div>
                         )}
                         {session.messages.map((msg, idx) => {
@@ -540,9 +703,9 @@ export default function App() {
 
                     <div className="flex justify-between items-center">
                         <div className="flex gap-2">
-                             <RetroButton onClick={() => sendMessage(contact.uin)} className="w-20 border-2">Send</RetroButton>
+                             <RetroButton onClick={() => sendMessage(contact.uin)} className="w-20 border-2">Enviar</RetroButton>
                              <div className="text-[10px] text-gray-600 flex flex-col justify-center leading-3">
-                                 <span>Alt+S</span>
+                                 <span>Enter</span>
                              </div>
                         </div>
                     </div>
@@ -554,7 +717,7 @@ export default function App() {
       <div className="fixed bottom-0 left-0 w-full bg-[#c0c0c0] border-t-2 border-white flex justify-between px-2 py-1">
             <div className="flex items-center gap-2">
                 <RetroButton className="flex items-center gap-1 px-2">
-                     <span className="font-bold italic">Start</span>
+                     <span className="font-bold italic">Iniciar</span>
                 </RetroButton>
                 <div className="w-[2px] h-6 bg-gray-400 mx-1 border-r border-white"></div>
             </div>

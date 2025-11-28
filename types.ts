@@ -1,9 +1,9 @@
 export enum UserStatus {
   ONLINE = 'Online',
-  AWAY = 'Away',
-  DND = 'DND', // Do Not Disturb
+  AWAY = 'Ausente',
+  DND = 'Ocupado', // Do Not Disturb
   OFFLINE = 'Offline',
-  INVISIBLE = 'Invisible'
+  INVISIBLE = 'Invisível'
 }
 
 export interface User {
@@ -13,6 +13,7 @@ export interface User {
   status: UserStatus;
   avatarId?: number;
   isBot?: boolean;
+  contacts?: string[]; // Array of contact UIDs
 }
 
 export interface Message {
